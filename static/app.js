@@ -235,15 +235,42 @@ async function handleClassify() {
       body: form,
     });
 
-    const data = await response.json();
+    // Read as text first so we can see exactly what Render returned
+    const text = await response.text();
+
+    console.log('Prediction HTTP status:', response.status);
+    console.log('Prediction response:', text);
+
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch (jsonError) {
+      console.error('Invalid JSON from server:', text);
+
+      throw new Error(
+        `Server returned invalid JSON (HTTP ${response.status}).`
+      );
+    }
+
     if (!response.ok) {
-      throw new Error(data.error || 'Classification failed. Please try another photo.');
+      throw new Error(
+        data.error || 'Classification failed.'
+      );
     }
 
     renderResults(data);
+
   } catch (error) {
-    const message = error && error.message ? error.message : 'Something went wrong while classifying the image.';
-    showError(`${message} Try a different image or a clearer photo.`);
+    console.error('Classification error:', error);
+
+    const message =
+      error && error.message
+        ? error.message
+        : 'Something went wrong while classifying the image.';
+
+    showError(message);
+
   } finally {
     setLoading(false);
   }
