@@ -39,3 +39,4 @@ Returns: { prediction: {label, confidence}, categories: [...], top_matches: [...
 Edit KEYWORDS and CATEGORIES in app.py. Animals are ImageNet classes 0-397.
 Anything unmatched falls into "Other".
 # object-category-classifier
+# object-category-classifier
