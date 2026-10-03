@@ -124,32 +124,81 @@ def index():
 
 @app.post("/predict")
 def predict():
-    file = request.files.get("file")
-    if file is None or file.filename == "":
-        return jsonify(error="No file was uploaded."), 400
-    if file.mimetype not in ALLOWED_TYPES:
-        return jsonify(error="Only JPEG and PNG images are supported."), 415
-
-    data = file.read()
     try:
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-    except (UnidentifiedImageError, OSError):
-        return jsonify(error="That file could not be read as an image."), 400
+        file = request.files.get("file")
 
-    totals, matches = classify_mock(data) if MOCK_MODE else classify_real(img)
+        if file is None or file.filename == "":
+            return jsonify({
+                "success": False,
+                "error": "No file was uploaded."
+            }), 400
 
-    categories = sorted(
-        ({"label": c, "confidence": round(p * 100, 2)} for c, p in totals.items()),
-        key=lambda x: x["confidence"],
-        reverse=True,
-    )
-    return jsonify(
-        prediction=categories[0],
-        categories=categories,
-        top_matches=matches,
-        mock=MOCK_MODE,
-    )
+        if file.mimetype not in ALLOWED_TYPES:
+            return jsonify({
+                "success": False,
+                "error": "Only JPEG and PNG images are supported."
+            }), 415
 
+        data = file.read()
+
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "The uploaded file is empty."
+            }), 400
+
+        try:
+            img = Image.open(io.BytesIO(data)).convert("RGB")
+        except (UnidentifiedImageError, OSError):
+            return jsonify({
+                "success": False,
+                "error": "That file could not be read as an image."
+            }), 400
+
+        # Run classification
+        if MOCK_MODE:
+            totals, matches = classify_mock(data)
+        else:
+            totals, matches = classify_real(img)
+
+        categories = sorted(
+            (
+                {
+                    "label": c,
+                    "confidence": round(p * 100, 2)
+                }
+                for c, p in totals.items()
+            ),
+            key=lambda x: x["confidence"],
+            reverse=True,
+        )
+
+        return jsonify({
+            "success": True,
+            "prediction": categories[0],
+            "categories": categories,
+            "top_matches": matches,
+            "mock": MOCK_MODE,
+        }), 200
+
+    except Exception as e:
+        import traceback
+
+        print("========== PREDICTION ERROR ==========")
+        traceback.print_exc()
+        print("=======================================")
+
+        return jsonify({
+            "success": False,
+            "error": f"Prediction failed: {str(e)}"
+        }), 500
+
+@app.get("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "mock_mode": MOCK_MODE
+    })
 
 @app.errorhandler(413)
 def too_large(_):
