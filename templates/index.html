@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Apple-inspired image classification interface for sorting uploaded photos into visual categories."
+    />
+    <title>Image Classifier</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'media',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: [
+                '-apple-system',
+                'BlinkMacSystemFont',
+                'SF Pro Display',
+                'Helvetica Neue',
+                'sans-serif',
+              ],
+            },
+            boxShadow: {
+              card: '0 10px 30px rgba(15, 23, 42, 0.08)',
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f5f7;
+        --panel: rgba(255, 255, 255, 0.72);
+        --panel-strong: #ffffff;
+        --panel-muted: #f2f2f7;
+        --stroke: rgba(15, 23, 42, 0.08);
+        --text: #1d1d1f;
+        --subtle: #6e6e73;
+        --subtle-strong: #3a3a3c;
+        --accent: #0071e3;
+        --accent-soft: rgba(0, 113, 227, 0.12);
+        --success: #1d7f5d;
+        --warning: #7b5a00;
+        --error: #b42318;
+        --bar: rgba(15, 23, 42, 0.08);
+        --shadow-soft: 0 18px 50px rgba(15, 23, 42, 0.08);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1c1e;
+          --panel: rgba(28, 28, 30, 0.72);
+          --panel-strong: #1f1f22;
+          --panel-muted: #2a2a2e;
+          --stroke: rgba(255, 255, 255, 0.08);
+          --text: #f5f5f7;
+          --subtle: #a1a1a6;
+          --subtle-strong: #e5e5e7;
+          --accent: #0a84ff;
+          --accent-soft: rgba(10, 132, 255, 0.18);
+          --success: #67d4a1;
+          --warning: #ffcc66;
+          --error: #f4a3a0;
+          --bar: rgba(255, 255, 255, 0.08);
+          --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.28);
+        }
+      }
+
+      html {
+        background: var(--bg);
+      }
+
+      body {
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      .glass-bar {
+        background: rgba(255, 255, 255, 0.64);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .glass-bar {
+          background: rgba(28, 28, 30, 0.72);
+        }
+      }
+
+      .soft-card {
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .dropzone {
+        transition: border-color 180ms ease, background-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+      }
+
+      .dropzone.is-active {
+        border-color: var(--accent);
+        background: rgba(0, 113, 227, 0.04);
+        box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.08);
+      }
+
+      .dropzone.is-filled {
+        min-height: 320px;
+      }
+
+      .preview-image {
+        max-height: 340px;
+        object-fit: cover;
+      }
+
+      .focus-ring:focus-visible,
+      .dropzone:focus-visible,
+      .button-focus:focus-visible {
+        outline: 3px solid rgba(0, 113, 227, 0.35);
+        outline-offset: 3px;
+      }
+
+      .result-card {
+        animation: fadeUp 420ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      @keyframes fadeUp {
+        0% {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        100% {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .confidence-fill {
+        width: 0;
+        transition: width 900ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      .skeleton {
+        position: relative;
+        overflow: hidden;
+        background: rgba(148, 163, 184, 0.12);
+      }
+
+      .skeleton::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        transform: translateX(-100%);
+        background: linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0) 0%,
+          rgba(255, 255, 255, 0.42) 50%,
+          rgba(255, 255, 255, 0) 100%
+        );
+        animation: shimmer 1.3s ease-in-out infinite;
+      }
+
+      @keyframes shimmer {
+        100% {
+          transform: translateX(100%);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+    </style>
+  </head>
+  <body class="min-h-screen antialiased">
+    <header class="glass-bar sticky top-0 z-30 border-b border-[color:var(--stroke)]">
+      <div class="mx-auto flex w-full max-w-[720px] items-center justify-between px-4 py-3 sm:px-6">
+        <div class="flex items-center gap-3">
+          <div class="flex h-10 w-10 items-center justify-center rounded-full bg-[color:var(--panel-muted)] text-lg shadow-sm ring-1 ring-[color:var(--stroke)]">
+            📷
+          </div>
+          <div>
+            <p class="text-[10px] font-medium uppercase tracking-[0.24em] text-[color:var(--subtle)]">Image classifier</p>
+            <p class="text-sm font-semibold text-[color:var(--text)]">Visual understanding</p>
+          </div>
+        </div>
+        <div class="rounded-full border border-[color:var(--stroke)] bg-[color:var(--panel-muted)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-[color:var(--subtle)]">
+          live
+        </div>
+      </div>
+    </header>
+
+    <main class="mx-auto w-full max-w-[720px] px-4 pb-16 pt-7 sm:px-6">
+      <section class="px-1">
+        <p class="text-[11px] font-medium uppercase tracking-[0.24em] text-[color:var(--subtle)]">Ready to sort</p>
+        <h1 class="mt-3 text-4xl font-semibold tracking-[-0.06em] text-[color:var(--text)] sm:text-[3.3rem]">
+          Find the category in one click.
+        </h1>
+        <p class="mt-3 max-w-[62ch] text-base leading-7 text-[color:var(--subtle)] sm:text-lg">
+          Upload a clear photo and we’ll identify the strongest match from Animals, Vehicles, Electronics,
+          Furniture, Food, Clothing, and Other.
+        </p>
+      </section>
+
+      <section class="mt-8">
+        <div
+          id="dropzone"
+          tabindex="0"
+          role="button"
+          aria-label="Choose an image to classify"
+          class="dropzone soft-card flex min-h-[300px] cursor-pointer flex-col items-center justify-center rounded-[24px] border border-dashed border-[color:var(--stroke)] bg-[color:var(--panel)] p-5 text-center transition-all"
+        >
+          <div id="dropContent" class="flex flex-col items-center justify-center text-center">
+            <div class="flex h-16 w-16 items-center justify-center rounded-full bg-[color:var(--accent-soft)] text-2xl shadow-sm ring-1 ring-[color:var(--stroke)]">
+              ⤴️
+            </div>
+            <div class="mt-5">
+              <p class="text-xl font-semibold tracking-[-0.04em] text-[color:var(--text)] sm:text-2xl">Drop an image here</p>
+              <p class="mt-2 text-sm text-[color:var(--subtle)] sm:text-base">JPEG or PNG, up to 10 MB</p>
+            </div>
+            <span class="mt-6 inline-flex items-center justify-center rounded-full bg-[color:var(--accent)] px-4 py-2.5 text-sm font-medium text-white shadow-sm">
+              Select photo
+            </span>
+          </div>
+
+          <img
+            id="preview"
+            alt="Selected image preview"
+            class="preview-image hidden max-h-[340px] w-full rounded-[20px] border border-[color:var(--stroke)] object-cover shadow-sm"
+          />
+          <input id="fileInput" type="file" accept="image/jpeg,image/png" class="hidden" aria-label="Upload image" />
+        </div>
+
+        <div class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <button
+            id="classifyBtn"
+            type="button"
+            disabled
+            class="button-focus inline-flex items-center justify-center gap-2 rounded-full bg-[color:var(--accent)] px-5 py-3 text-base font-semibold text-white shadow-sm transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <svg id="spinner" class="hidden h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-25" />
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+            </svg>
+            <span id="btnLabel">Classify</span>
+          </button>
+
+          <button
+            id="chooseAnotherBtn"
+            type="button"
+            class="button-focus hidden rounded-full border border-[color:var(--stroke)] bg-[color:var(--panel-muted)] px-4 py-3 text-sm font-medium text-[color:var(--subtle-strong)] transition-colors hover:bg-[color:var(--panel)]"
+          >
+            Choose another
+          </button>
+        </div>
+
+        <p id="errorBox" class="mt-4 hidden rounded-2xl border border-[color:var(--error)]/20 bg-[color:var(--error)]/5 px-3 py-2 text-sm text-[color:var(--error)]" role="alert" aria-live="assertive"></p>
+      </section>
+
+      <section id="loadingSkeleton" class="soft-card hidden mt-8 rounded-[24px] border border-[color:var(--stroke)] p-6" aria-live="polite">
+        <div class="flex items-center gap-3">
+          <div class="skeleton h-12 w-12 rounded-full"></div>
+          <div class="flex-1 space-y-2">
+            <div class="skeleton h-3 w-28 rounded-full"></div>
+            <div class="skeleton h-8 w-40 rounded-full"></div>
+          </div>
+        </div>
+
+        <div class="mt-6 space-y-3">
+          <div class="skeleton h-4 w-28 rounded-full"></div>
+          <div class="space-y-3">
+            <div class="skeleton h-4 w-full rounded-full"></div>
+            <div class="skeleton h-4 w-full rounded-full"></div>
+            <div class="skeleton h-4 w-full rounded-full"></div>
+            <div class="skeleton h-4 w-full rounded-full"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="results" class="hidden mt-8" aria-live="polite" aria-atomic="true">
+        <div class="result-card soft-card rounded-[24px] border border-[color:var(--stroke)] p-5 sm:p-6">
+          <div class="flex items-start justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <div id="categoryBadge" class="flex h-12 w-12 items-center justify-center rounded-full bg-[color:var(--accent-soft)] text-2xl shadow-sm ring-1 ring-[color:var(--stroke)]">📦</div>
+              <div>
+                <p class="text-[10px] font-medium uppercase tracking-[0.2em] text-[color:var(--subtle)]">Predicted category</p>
+                <h2 id="topLabel" class="mt-1 text-2xl font-semibold tracking-[-0.05em] text-[color:var(--text)] sm:text-3xl">—</h2>
+              </div>
+            </div>
+            <div class="rounded-full border border-[color:var(--stroke)] bg-[color:var(--panel-muted)] px-3 py-1.5 text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--subtle)]">
+              <span id="confidenceStatus">—</span>
+            </div>
+          </div>
+
+          <div class="mt-5 flex items-end justify-between gap-4 border-t border-[color:var(--stroke)] pt-5">
+            <div>
+              <p id="guidanceText" class="text-sm font-medium text-[color:var(--subtle)]">Checking the image…</p>
+              <p id="mockNote" class="mt-2 hidden text-sm text-[color:var(--warning)]">Mock mode: these scores are sample outputs for demo purposes.</p>
+            </div>
+            <div class="text-right">
+              <div class="text-[2.5rem] font-semibold tracking-[-0.07em] text-[color:var(--text)] sm:text-5xl">
+                <span id="topPercent">0</span><span class="ml-1 text-lg align-top text-[color:var(--subtle)] sm:text-2xl">%</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="tipBox" class="mt-5 hidden rounded-2xl border border-[color:var(--stroke)] bg-[color:var(--panel-muted)] px-3.5 py-3 text-sm leading-6 text-[color:var(--subtle-strong)]"></div>
+
+          <div class="mt-7">
+            <div class="flex items-center justify-between gap-3">
+              <h3 class="text-sm font-medium uppercase tracking-[0.18em] text-[color:var(--subtle)]">Confidence by category</h3>
+              <span class="text-xs uppercase tracking-[0.16em] text-[color:var(--subtle)]">Sorted</span>
+            </div>
+            <div id="bars" class="mt-4 space-y-3" aria-label="Category confidence bars"></div>
+          </div>
+
+          <div class="mt-7 flex items-center justify-between gap-3 border-t border-[color:var(--stroke)] pt-5">
+            <div>
+              <p class="text-[10px] font-medium uppercase tracking-[0.18em] text-[color:var(--subtle)]">Next step</p>
+              <p class="mt-1 text-sm text-[color:var(--subtle)]">Review or classify another image.</p>
+            </div>
+            <button
+              id="tryAgainBtn"
+              type="button"
+              class="button-focus rounded-full border border-[color:var(--stroke)] bg-[color:var(--panel-muted)] px-4 py-2.5 text-sm font-medium text-[color:var(--subtle-strong)] transition-colors hover:bg-[color:var(--panel)]"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
