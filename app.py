@@ -1,209 +1,281 @@
-"""Object Category Classification from Images - Flask backend.
-
-Run:  python app.py
-Fast mock mode (no model download):  MOCK_MODE=1 python app.py
-"""
-import hashlib
-import io
 import os
-import re
+import io
+import json
+import traceback
 
-from flask import Flask, jsonify, render_template, request
-from PIL import Image, UnidentifiedImageError
+from flask import Flask, render_template, request, jsonify
+from PIL import Image
+
+import torch
+from torchvision import models, transforms
+
+
+# ============================================================
+# FLASK APP
+# ============================================================
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB upload limit
 
-ALLOWED_TYPES = {"image/jpeg", "image/png"}
-MOCK_MODE = os.environ.get("MOCK_MODE") == "1"
-
-# ---------------------------------------------------------------------------
-# Predefined categories. Animals are ImageNet classes 0-397 (no keywords needed).
-# Edit the keyword sets to change what each category contains.
-# ---------------------------------------------------------------------------
-KEYWORDS = {
-    "Vehicles": {
-        "car", "cab", "van", "truck", "bus", "jeep", "limousine", "convertible",
-        "minivan", "pickup", "trolleybus", "tractor", "bicycle", "scooter",
-        "moped", "airliner", "warplane", "airship", "ship", "liner", "canoe",
-        "boat", "yawl", "schooner", "train", "locomotive", "streetcar",
-        "ambulance", "wagon", "motorcycle", "speedboat", "submarine",
-        "catamaran", "trimaran", "snowmobile",
-    },
-    "Electronics": {
-        "laptop", "notebook", "computer", "monitor", "screen", "television",
-        "telephone", "ipod", "mouse", "keyboard", "remote", "disc", "modem",
-        "printer", "projector", "radio", "camera", "joystick", "speaker",
-        "desktop", "pay-phone",
-    },
-    "Furniture": {
-        "chair", "couch", "table", "desk", "bookcase", "wardrobe", "crib",
-        "bassinet", "cradle", "throne", "chiffonier", "bench", "cabinet",
-        "chest", "sofa", "stool",
-    },
-    "Food": {
-        "pizza", "cheeseburger", "hotdog", "bagel", "pretzel", "burrito",
-        "guacamole", "carbonara", "espresso", "banana", "orange", "lemon",
-        "strawberry", "pineapple", "pomegranate", "fig", "broccoli",
-        "cauliflower", "zucchini", "cucumber", "cabbage", "artichoke", "cream",
-        "meat", "potpie", "trifle", "dough", "consomme", "apple", "jackfruit",
-        "squash", "eggnog",
-    },
-    "Clothing": {
-        "jersey", "jean", "sweatshirt", "cardigan", "suit", "gown", "bikini",
-        "trunks", "sandal", "loafer", "boot", "shoe", "hat", "sombrero",
-        "bonnet", "cloak", "coat", "miniskirt", "overskirt", "hoopskirt",
-        "kimono", "poncho", "abaya", "sock", "brassiere", "pajama", "vest",
-        "cap", "helmet",
-    },
-}
-CATEGORIES = ["Animals", "Vehicles", "Electronics", "Furniture", "Food", "Clothing", "Other"]
-
-_model = None
-_preprocess = None
-_labels = None
-_class_category = None
+# Maximum upload size: 10 MB
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 
-def category_of(idx: int, name: str) -> str:
-    if idx <= 397:
-        return "Animals"
-    tokens = set(re.findall(r"[a-z\-]+", name.lower()))
-    for category, words in KEYWORDS.items():
-        if tokens & words:
-            return category
-    return "Other"
+# ============================================================
+# DEVICE
+# ============================================================
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+print("========================================")
+print("Object Classification System")
+print("Device:", device)
+print("========================================")
 
 
-def load_model():
-    """Load MobileNetV3 once, on first request."""
-    global _model, _preprocess, _labels, _class_category
-    if _model is not None:
-        return
-    from torchvision import models  # imported lazily so MOCK_MODE needs no torch
+# ============================================================
+# IMAGE TRANSFORMATION
+# ============================================================
 
-    weights = models.MobileNet_V3_Large_Weights.DEFAULT
-    _model = models.mobilenet_v3_large(weights=weights).eval()
-    _preprocess = weights.transforms()
-    _labels = weights.meta["categories"]
-    _class_category = [category_of(i, n) for i, n in enumerate(_labels)]
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
 
 
-def classify_real(img: Image.Image):
-    import torch
+# ============================================================
+# MODEL
+# ============================================================
 
-    load_model()
+print("Loading classification model...")
+
+try:
+    weights = models.ResNet50_Weights.DEFAULT
+
+    model = models.resnet50(weights=weights)
+
+    model.eval()
+    model.to(device)
+
+    categories = weights.meta["categories"]
+
+    print("Model loaded successfully.")
+    print("Number of classes:", len(categories))
+
+except Exception as e:
+    print("ERROR while loading model:")
+    print(str(e))
+    traceback.print_exc()
+
+    model = None
+    categories = []
+
+
+# ============================================================
+# CLASSIFICATION FUNCTION
+# ============================================================
+
+def classify_image(image):
+    """
+    Classifies an uploaded image using ResNet50.
+    Returns top predictions.
+    """
+
+    if model is None:
+        raise RuntimeError("Classification model could not be loaded.")
+
+    # Convert image to RGB
+    image = image.convert("RGB")
+
+    # Apply preprocessing
+    input_tensor = transform(image)
+
+    # Add batch dimension
+    input_batch = input_tensor.unsqueeze(0)
+
+    # Move to CPU/GPU
+    input_batch = input_batch.to(device)
+
+    # Prediction
     with torch.no_grad():
-        probs = _model(_preprocess(img).unsqueeze(0)).softmax(1)[0]
+        output = model(input_batch)
 
-    totals = {c: 0.0 for c in CATEGORIES}
-    for i, p in enumerate(probs.tolist()):
-        totals[_class_category[i]] += p
+    # Convert logits to probabilities
+    probabilities = torch.nn.functional.softmax(
+        output[0],
+        dim=0
+    )
 
-    top = probs.topk(3)
-    matches = [
-        {"label": _labels[i], "confidence": round(p * 100, 2)}
-        for p, i in zip(top.values.tolist(), top.indices.tolist())
-    ]
-    return totals, matches
+    # Get top 5 predictions
+    top_probabilities, top_indices = torch.topk(
+        probabilities,
+        5
+    )
+
+    results = []
+
+    for probability, index in zip(
+        top_probabilities,
+        top_indices
+    ):
+        class_name = categories[index.item()]
+        confidence = float(probability.item() * 100)
+
+        results.append({
+            "label": class_name,
+            "confidence": round(confidence, 2)
+        })
+
+    return results
 
 
-def classify_mock(img_bytes: bytes):
-    """Deterministic fake scores derived from the image bytes (for quick demos)."""
-    digest = hashlib.sha256(img_bytes).digest()
-    raw = [digest[i] + 1 for i in range(len(CATEGORIES))]
-    raw[digest[-1] % len(CATEGORIES)] += 400  # make one category clearly win
-    total = sum(raw)
-    return {c: v / total for c, v in zip(CATEGORIES, raw)}, []
+# ============================================================
+# HOME PAGE
+# ============================================================
 
-
-@app.get("/")
-def index():
+@app.route("/")
+def home():
     return render_template("index.html")
 
 
-@app.post("/predict")
-def predict():
+# ============================================================
+# CLASSIFY API
+# ============================================================
+
+@app.route("/classify", methods=["POST"])
+def classify():
+
     try:
-        file = request.files.get("file")
 
-        if file is None or file.filename == "":
+        # Check whether file exists
+        if "image" not in request.files:
+
             return jsonify({
                 "success": False,
-                "error": "No file was uploaded."
+                "error": "No image file was uploaded."
             }), 400
 
-        if file.mimetype not in ALLOWED_TYPES:
+        file = request.files["image"]
+
+        # Check filename
+        if file.filename == "":
+
             return jsonify({
                 "success": False,
-                "error": "Only JPEG and PNG images are supported."
-            }), 415
-
-        data = file.read()
-
-        if not data:
-            return jsonify({
-                "success": False,
-                "error": "The uploaded file is empty."
+                "error": "Please select an image."
             }), 400
 
-        try:
-            img = Image.open(io.BytesIO(data)).convert("RGB")
-        except (UnidentifiedImageError, OSError):
+        # Read image
+        image_bytes = file.read()
+
+        if not image_bytes:
+
             return jsonify({
                 "success": False,
-                "error": "That file could not be read as an image."
+                "error": "The uploaded image is empty."
             }), 400
 
-        # Run classification
-        if MOCK_MODE:
-            totals, matches = classify_mock(data)
-        else:
-            totals, matches = classify_real(img)
-
-        categories = sorted(
-            (
-                {
-                    "label": c,
-                    "confidence": round(p * 100, 2)
-                }
-                for c, p in totals.items()
-            ),
-            key=lambda x: x["confidence"],
-            reverse=True,
+        # Open image
+        image = Image.open(
+            io.BytesIO(image_bytes)
         )
+
+        # Classify
+        results = classify_image(image)
+
+        # Best prediction
+        best_result = results[0]
 
         return jsonify({
             "success": True,
-            "prediction": categories[0],
-            "categories": categories,
-            "top_matches": matches,
-            "mock": MOCK_MODE,
-        }), 200
+
+            "prediction": best_result["label"],
+
+            "confidence": best_result["confidence"],
+
+            "results": results
+        })
 
     except Exception as e:
-        import traceback
 
-        print("========== PREDICTION ERROR ==========")
+        print("========================================")
+        print("CLASSIFICATION ERROR")
+        print(str(e))
         traceback.print_exc()
-        print("=======================================")
+        print("========================================")
 
         return jsonify({
             "success": False,
-            "error": f"Prediction failed: {str(e)}"
+            "error": str(e)
         }), 500
 
-@app.get("/health")
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.route("/health")
 def health():
+
     return jsonify({
         "status": "ok",
-        "mock_mode": MOCK_MODE
+        "model_loaded": model is not None,
+        "device": str(device)
     })
 
-@app.errorhandler(413)
-def too_large(_):
-    return jsonify(error="Image is too large. The limit is 10 MB."), 413
 
+# ============================================================
+# ERROR HANDLERS
+# ============================================================
+
+@app.errorhandler(413)
+def file_too_large(error):
+
+    return jsonify({
+        "success": False,
+        "error": "File is too large. Maximum size is 10 MB."
+    }), 413
+
+
+@app.errorhandler(404)
+def page_not_found(error):
+
+    return jsonify({
+        "success": False,
+        "error": "Page not found."
+    }), 404
+
+
+@app.errorhandler(500)
+def internal_server_error(error):
+
+    return jsonify({
+        "success": False,
+        "error": "Internal server error."
+    }), 500
+
+
+# ============================================================
+# RENDER / PRODUCTION SERVER
+# ============================================================
 
 if __name__ == "__main__":
-       app.run(debug=True, port=5002)
+
+    # Render provides PORT through environment variable.
+    # Local development uses port 10000.
+    port = int(os.environ.get("PORT", 10000))
+
+    print("========================================")
+    print("Starting Flask server")
+    print("Host: 0.0.0.0")
+    print("Port:", port)
+    print("========================================")
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )
