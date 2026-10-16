@@ -1,5 +1,7 @@
 import os
 import torch
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 from flask import Flask, request, jsonify, render_template
 from PIL import Image
 from torchvision import models
@@ -103,7 +105,18 @@ def classify():
         # Open Image
         # ========================================
 
-        image = Image.open(file.stream).convert("RGB")
+        image = Image.open(file.stream)
+        image.thumbnail((512, 512))
+        image = image.convert("RGB")
+        
+        input_tensor = preprocess(image)
+        input_batch = input_tensor.unsqueeze(0)
+        
+        with torch.inference_mode():
+            output = model(input_batch)
+            probabilities = torch.nn.functional.softmax(
+                output[0], dim=0
+            )
 
         # ========================================
         # Preprocess Image
